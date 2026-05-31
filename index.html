@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Machine Downtime Dashboard</title>
+  <meta name="description" content="Dashboard ภาพรวม Downtime เครื่องจักร · MTTR · MTBF · Machine Availability% พร้อมรายงาน PDF รายเครื่อง">
+
+  <link rel="stylesheet" href="css/styles.css">
+
+  <!-- Third-party libraries -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js" defer></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js" defer></script>
+
+  <!-- Application modules (load order matters) -->
+  <script src="js/config.js" defer></script>
+  <script src="js/dataService.js" defer></script>
+  <script src="js/metrics.js" defer></script>
+  <script src="js/charts.js" defer></script>
+  <script src="js/report.js" defer></script>
+  <script src="js/app.js" defer></script>
+</head>
+<body>
+  <!-- Loading overlay -->
+  <div class="load-overlay" id="load-overlay">
+    <div class="load-logo">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+    </div>
+    <div class="load-title">Machine Downtime Dashboard</div>
+    <div class="load-sub" id="load-step">กำลังเชื่อมต่อ Google Sheets…</div>
+    <div class="load-bar-wrap"><div class="load-bar" id="load-bar"></div></div>
+  </div>
+
+  <div class="db" id="app-root">
+    <div id="app"><div class="load-msg">กำลังโหลดข้อมูล…</div></div>
+    <!-- print report injected here by JS -->
+    <div id="print-report"></div>
+  </div>
+</body>
+</html>
