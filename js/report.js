@@ -59,15 +59,17 @@
               <th class="num">MTBF (ชม./ครั้ง)</th><th class="num">MA%</th>
             </tr></thead>
             <tbody>
-              ${dailyR.map(r => `<tr>
+              ${dailyR.map(r => {
+                const mid = r.events === 0 && r.failSMU >= 0.01; /* วันกลาง breakdown ที่ลากต่อมา */
+                return `<tr>
                 <td style="white-space:nowrap">${M.fmtDate(r.date)}</td>
-                <td class="num">${r.events}</td>
+                <td class="num">${mid ? '↳' : r.events}</td>
                 <td class="num">${r.failSMU.toFixed(2)}</td>
                 <td class="num">${r.uptime.toFixed(2)}</td>
                 <td class="num bold ${r.events > 0 ? mttrClass(r.mttr) : ''}">${r.events > 0 ? r.mttr.toFixed(2) : '—'}</td>
                 <td class="num bold ${r.events > 0 ? mtbfClass(r.mtbf) : ''}">${r.events > 0 ? r.mtbf.toFixed(2) : '—'}</td>
-                <td class="num bold ${r.events > 0 ? maClass(r.ma) : ''}">${r.events > 0 ? r.ma.toFixed(1) + '%' : '—'}</td>
-              </tr>`).join('')}
+                <td class="num bold ${(r.events > 0 || mid) ? maClass(r.ma) : ''}">${(r.events > 0 || mid) ? r.ma.toFixed(1) + '%' : '—'}</td>
+              </tr>`; }).join('')}
             </tbody>
           </table>`;
 

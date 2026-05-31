@@ -253,14 +253,16 @@
       <div class="panel-full"><div class="panel-hdr"><span class="panel-title">ตารางรายวัน — ${esc(selMachine)}</span></div>
       <div class="tbl-wrap"><table><thead><tr><th>วันที่</th><th class="num-right">ครั้ง Failure</th><th class="num-right">Failure DT (ชม.)</th><th class="num-right">Uptime (ชม.)</th><th class="num-right">MTTR</th><th class="num-right">MTBF</th><th class="num-right">MA%</th></tr></thead><tbody>
       ${dm.map(r => {
-        const noFail = r.events === 0;
+        const noFail = r.events === 0 && r.failSMU < 0.01;       /* วันปกติ ไม่มี failure */
+        const mid    = r.events === 0 && r.failSMU >= 0.01;      /* วันกลาง breakdown ที่ลากต่อมา */
+        const dash   = '<span style="color:var(--text-secondary)">—</span>';
         return `<tr style="${noFail ? 'opacity:.55' : ''}">
           <td style="font-weight:500;white-space:nowrap">${M.fmtDate(r.date)}</td>
-          <td class="num-right">${noFail ? '<span style="color:var(--text-secondary)">—</span>' : r.events}</td>
-          <td class="num-right">${noFail ? '<span style="color:var(--text-secondary)">—</span>' : r.failSMU.toFixed(2)}</td>
+          <td class="num-right">${noFail ? dash : mid ? '<span style="color:var(--text-secondary)" title="ต่อเนื่องจาก breakdown">↳</span>' : r.events}</td>
+          <td class="num-right">${noFail ? dash : `<span style="color:${mid ? M.avC(0) : 'inherit'}">${r.failSMU.toFixed(2)}</span>`}</td>
           <td class="num-right">${r.uptime.toFixed(2)}</td>
-          <td class="num-right"><span style="color:${noFail ? 'var(--text-secondary)' : M.mttrC(r.mttr)};font-weight:${noFail ? '400' : '500'}">${noFail ? '0.00' : r.mttr.toFixed(2)}</span></td>
-          <td class="num-right"><span style="color:${noFail ? '#0f6e56' : M.mtbfC(r.mtbf)};font-weight:${noFail ? '400' : '500'}">${r.mtbf.toFixed(2)}</span></td>
+          <td class="num-right"><span style="color:${noFail || mid ? 'var(--text-secondary)' : M.mttrC(r.mttr)};font-weight:${noFail || mid ? '400' : '500'}">${noFail || mid ? '—' : r.mttr.toFixed(2)}</span></td>
+          <td class="num-right"><span style="color:${noFail ? '#0f6e56' : mid ? 'var(--text-secondary)' : M.mtbfC(r.mtbf)};font-weight:${noFail || mid ? '400' : '500'}">${mid ? '—' : r.mtbf.toFixed(2)}</span></td>
           <td class="num-right"><span style="color:${noFail ? '#0f6e56' : M.avC(r.ma)};font-weight:${noFail ? '400' : '500'}">${r.ma.toFixed(1)}%</span></td>
         </tr>`;
       }).join('')}
