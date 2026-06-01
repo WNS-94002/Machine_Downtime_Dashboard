@@ -243,21 +243,38 @@
     return { daily, summary };
   }
 
-  /* ── MA% รวมของกลุ่มเครื่องจักร ─────────────────────────────────────────── */
+  /* ── MA% รวมของกลุ่มเครื่องจักร (หลายเครื่องรวมกัน) ──────────────────────────
+     สำคัญ: ต้องคิดแยก "ต่อเครื่อง" ก่อนแล้วค่อยรวม ไม่ใช่ยุบทุกเครื่องลงวันเดียว
+       1) Failure DT — cap ที่ 24 ชม./วัน แยกต่อเครื่อง แล้วจึงบวกรวม
+          (ถ้ารวมก่อน cap วันที่สองเครื่องเสียพร้อมกันจะถูกตัดทอนผิด)
+       2) ฐานเวลา = (จำนวนวัน) × 24 × (จำนวนเครื่องในกลุ่ม)
+       3) จำนวนครั้ง = ผลรวม incident ของแต่ละเครื่อง
+     ผล: MA%กลุ่ม = Uptimeรวม ÷ ฐานเวลารวม = ค่าเฉลี่ยถ่วงเวลาของ MA% รายเครื่อง
+     ────────────────────────────────────────────────────────────────────────── */
   function calcGroupMA(data, machines, failTypes, from, to) {
     const rangeDays = allDaysInRange(from, to);
-    const failRecs = data.filter(r => machines.includes(r.machine) && failTypes.includes(r.type));
-    const agg = aggregateFailures(failRecs, rangeDays);
+    const nMachines = machines.length || 1;
 
-    const tAllDays = rangeDays.length > 0 ? rangeDays.length : Object.keys(agg.perDayFail).length;
-    const tDT = agg.totalFailDT;
-    const tEv = agg.totalEvents;
-    const tUp = Math.max(tAllDays * HRS - tDT, 0);
+    let tDT = 0;     /* Failure DT รวม (cap แยกต่อเครื่อง) */
+    let tEv = 0;     /* จำนวนครั้งรวม */
+    const dayUnion = {};  /* เก็บวันที่มี failure (เผื่อกรณีไม่กำหนดช่วง) */
+
+    machines.forEach(m => {
+      const recs = data.filter(r => r.machine === m && failTypes.includes(r.type));
+      const agg = aggregateFailures(recs, rangeDays);
+      tDT += agg.totalFailDT;   /* totalFailDT ถูก cap 24/วัน ภายในต่อเครื่องแล้ว */
+      tEv += agg.totalEvents;
+      Object.keys(agg.perDayFail).forEach(dk => { dayUnion[dk] = true; });
+    });
+
+    const tDays = rangeDays.length > 0 ? rangeDays.length : Object.keys(dayUnion).length;
+    const base = tDays * HRS * nMachines;            /* ฐานเวลารวมทั้งกลุ่ม */
+    const tUp = Math.max(base - tDT, 0);
     return {
       mttr: tEv > 0 ? tDT / tEv : 0,
       mtbf: tEv > 0 ? tUp / tEv : HRS,
-      ma: tAllDays > 0 ? (tUp / (tAllDays * HRS)) * 100 : 100,
-      totalDays: tAllDays,
+      ma: base > 0 ? (tUp / base) * 100 : 100,
+      totalDays: tDays,
       totalEvents: tEv,
       totalFailDT: tDT,
       totalUptime: tUp,
