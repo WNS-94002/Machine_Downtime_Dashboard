@@ -15,6 +15,14 @@
   const HRS = 24;                       /* ชั่วโมงฐานต่อวัน (สำหรับ Uptime/MA%) */
   const CACHE_TTL_MS = 5 * 60 * 1000;   /* อายุ cache = 5 นาที */
 
+  /* ── การรวม "ครั้ง" (incident) ของ Downtime ──────────────────────────────
+     breakdown ยาวข้ามวัน/หลายกะ ที่ Downtime ต่อเนื่องกัน (ช่วงเครื่องเดินคั่น
+     ไม่เกิน BREAKDOWN_GAP_HRS ชม.) จะถูกนับเป็น "1 ครั้ง" และรวมชั่วโมงเข้าด้วยกัน
+     → ทำให้ MTTR สะท้อนเหตุการณ์จริง ไม่ใช่จำนวนแถว/กะ
+     ปรับค่าได้: ค่ามาก = รวม breakdown เข้าด้วยกันง่ายขึ้น (แต่เสี่ยงรวม failure
+     คนละเหตุการณ์), ค่าน้อย = แยกละเอียดขึ้น */
+  const BREAKDOWN_GAP_HRS = 24;
+
   /* ── เครื่องจักร ─────────────────────────────────────────────────────────── */
   const MACHINES = ['System', 'Spreader', 'Crusher #1', 'Crusher #2', 'Crusher #3', 'Bucket Wheel #1', 'Bucket Wheel #2'];
   const MSHORT   = ['Sys', 'SPD', 'CR1', 'CR2', 'CR3', 'BW1', 'BW2'];
@@ -58,7 +66,7 @@
     SHEET_ID, GID_2026, GID_2025,
     CSV_2026: csv(GID_2026),
     CSV_2025: csv(GID_2025),
-    HRS, CACHE_TTL_MS,
+    HRS, CACHE_TTL_MS, BREAKDOWN_GAP_HRS,
     MACHINES, MSHORT, MALIAS,
     FAILURE_TYPES, PRINT_GROUPS,
     TYPE_ORDER, TC, MC, DP, TH_M,

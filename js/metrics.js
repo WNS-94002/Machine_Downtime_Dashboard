@@ -5,13 +5,23 @@
    นิยาม (Base = 24 ชม./วัน):
      MTTR = Failure DT ÷ จำนวนครั้ง
      MTBF = Uptime ÷ จำนวนครั้ง
-     MA%  = MTBF ÷ (MTBF + MTTR) × 100
+     MA%  = Uptime ÷ (วันทั้งหมด × 24) × 100   [เทียบเท่า MTBF ÷ (MTBF+MTTR) × 100]
+
+   หัวใจของความถูกต้อง (breakdown ยาวข้ามวัน):
+     1) splitHours — กระจายชั่วโมง Downtime ลง "วันจริง" ตาม Start + SMU
+        (ไม่พึ่ง Finish ที่อาจเพี้ยนหลังการรวมกะ) → วันที่ดับทั้งวัน Uptime = 0
+     2) detectIncidents — รวม Downtime ต่อเนื่องที่ "detail เหมือนกัน" เป็น 1 ครั้ง
+        → MTTR/MTBF สะท้อนเหตุการณ์จริง ไม่ใช่จำนวนแถว/กะ
    ========================================================================== */
 (function (global) {
   'use strict';
 
   const cfg = global.DASH_CONFIG;
   const HRS = cfg.HRS;
+  const MIN = 60000;        /* 1 นาที (ms) */
+  const DAY_MS = 86400000;  /* 1 วัน (ms) */
+  /* ช่องว่างสูงสุด (นาที) ที่ยังถือว่า Downtime ต่อเนื่องเป็น breakdown เดียวกัน */
+  const GAP_MIN = (cfg.BREAKDOWN_GAP_HRS != null ? cfg.BREAKDOWN_GAP_HRS : 24) * 60;
 
   /* ── escape ข้อความก่อน inject ลง innerHTML (กัน markup เพี้ยน/XSS) ──────── */
   function esc(value) {
@@ -31,7 +41,7 @@
   /* "YYYY-MM-DD" → Date (local, ไม่ใช่ UTC) */
   function parseDateKey(dk) { const [y, m, d] = dk.split('-').map(Number); return new Date(y, m - 1, d); }
 
-  /* ── Filter helpers (range = {from, to}) ────────────────────────────────── */
+  /* ── Filter helpers ─────────────────────────────────────────────────────── */
   function inRange(r, from, to) {
     if (!r.date) return false;
     if (from && r.date < from) return false;
@@ -62,65 +72,161 @@
     return days;
   }
 
+  /* ══════════════════════════════════════════════════════════════════════════
+     BREAKDOWN HELPERS
+  ══════════════════════════════════════════════════════════════════════════ */
+
+  /* normalize detail สำหรับเทียบความเหมือน: ตัด dash/ช่องว่างหัว + ย่อช่องว่าง + lowercase */
+  function normDetail(s) {
+    return (s || '').toLowerCase().replace(/^[\s\-–—.]+/, '').replace(/\s+/g, ' ').trim();
+  }
+
+  /* กระจาย Downtime → ชั่วโมงต่อวัน { 'YYYY-MM-DD': hrs }
+     นับจาก absStart ไล่ข้ามวันด้วยจำนวนชั่วโมงจริง (smu) — ไม่พึ่ง absFinish */
+  function splitHours(asMin, hours) {
+    const out = {};
+    let cur = asMin * MIN;
+    let remain = hours * 3600000; /* ms ที่เหลือต้องกระจาย */
+    let guard = 0;
+    while (remain > 1e-6 && guard++ < 2000) {
+      const d = new Date(cur);
+      const nextDay = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() + DAY_MS;
+      const segEnd = Math.min(cur + remain, nextDay);
+      out[dateKey(d)] = (out[dateKey(d)] || 0) + (segEnd - cur) / 3600000;
+      remain -= (segEnd - cur);
+      cur = segEnd;
+    }
+    return out;
+  }
+
+  /* รวม failure records → incidents
+     ต่อเนื่องเป็นครั้งเดียวกันเมื่อ: detail เหมือนกัน  และ  เริ่มภายใน GAP_MIN
+     นาที หลังก้อนเดียวกันสิ้นสุด (effEnd = absStart + smu ชั่วโมง)
+     ── group ตาม detail ก่อน แล้วค่อย chain ตามเวลา เพื่อไม่ให้ record detail อื่น
+        ที่แทรกกลาง (เช่นงานซ่อมย่อยระหว่าง breakdown ใหญ่) มาตัดการนับครั้ง */
+  function detectIncidents(failRecs) {
+    const withTime = failRecs.filter(r => r.absStart != null);
+    const noTime = failRecs.filter(r => r.absStart == null);
+
+    /* group by normalized detail */
+    const groups = {};
+    withTime.forEach(r => {
+      const det = normDetail(r.detail);
+      (groups[det] || (groups[det] = [])).push(r);
+    });
+
+    const incidents = [];
+    for (const det in groups) {
+      const recs = groups[det].sort((a, b) => a.absStart - b.absStart);
+      let cur = null;
+      for (const r of recs) {
+        const start = r.absStart;
+        const end = r.absStart + r.smu * 60; /* นาที (wall-clock โดยประมาณจาก smu) */
+        if (cur && start <= cur.end + GAP_MIN) {
+          cur.end = Math.max(cur.end, end);
+          cur.hours += r.smu;
+        } else {
+          cur = { absStart: start, end, hours: r.smu, date: r.date, detail: det };
+          incidents.push(cur);
+        }
+      }
+    }
+    /* แถวที่ไม่มีเวลาเริ่ม → นับเป็น incident ละ 1 (อิงวันที่) */
+    for (const r of noTime) incidents.push({ absStart: null, end: null, hours: r.smu, date: r.date, detail: normDetail(r.detail) });
+
+    /* เรียงตามเวลาเริ่มเพื่อความเป็นระเบียบของผลลัพธ์ */
+    return incidents.sort((a, b) => (a.absStart || 0) - (b.absStart || 0));
+  }
+
+  /* สรุปสถิติ failure ของชุด record เทียบช่วงวัน
+     → { perDayFail:{dk:hrs}, perDayEvents:{dk:n}, incidents, totalFailDT, totalEvents } */
+  function aggregateFailures(failRecs, rangeDays) {
+    const perDayFail = {};
+    failRecs.forEach(r => {
+      if (r.absStart != null) {
+        const seg = splitHours(r.absStart, r.smu);
+        for (const dk in seg) perDayFail[dk] = (perDayFail[dk] || 0) + seg[dk];
+      } else {
+        const dk = dateKey(r.date);
+        perDayFail[dk] = (perDayFail[dk] || 0) + r.smu;
+      }
+    });
+
+    const incidents = detectIncidents(failRecs);
+    const perDayEvents = {};
+    incidents.forEach(inc => {
+      const dk = inc.absStart != null ? dateKey(new Date(inc.absStart * MIN)) : dateKey(inc.date);
+      perDayEvents[dk] = (perDayEvents[dk] || 0) + 1;
+    });
+
+    /* รวม Downtime: cap ที่ 24 ชม./วัน (วันที่ดับเต็มวัน = 24 พอดี) */
+    const days = rangeDays.length > 0 ? rangeDays : Object.keys(perDayFail);
+    const totalFailDT = days.reduce((s, dk) => s + Math.min(perDayFail[dk] || 0, HRS), 0);
+
+    return { perDayFail, perDayEvents, incidents, totalFailDT, totalEvents: incidents.length };
+  }
+
+  /* กระจาย Downtime ทุกประเภท (ไม่เฉพาะ failure) → ชั่วโมงต่อวัน */
+  function distributeAll(recs) {
+    const perDay = {};
+    recs.forEach(r => {
+      if (r.absStart != null) {
+        const seg = splitHours(r.absStart, r.smu);
+        for (const dk in seg) perDay[dk] = (perDay[dk] || 0) + seg[dk];
+      } else {
+        const dk = dateKey(r.date);
+        perDay[dk] = (perDay[dk] || 0) + r.smu;
+      }
+    });
+    return perDay;
+  }
+
   /* ── MTTR / MTBF / MA% รายเครื่อง ───────────────────────────────────────── */
   function calcMTTRMTBF(data, from, to) {
     const MACHINES = cfg.MACHINES;
-
-    /* Step 1: bucket ทุกแถวตาม machine + date */
-    const bmd = {}; MACHINES.forEach(m => bmd[m] = {});
-    data.forEach(r => {
-      const dk = dateKey(r.date);
-      if (!bmd[r.machine]) return;
-      if (!bmd[r.machine][dk]) bmd[r.machine][dk] = { allSMU: 0, failSMU: 0, failEvents: 0, date: r.date };
-      bmd[r.machine][dk].allSMU += r.smu;
-      if (isFailure(r.machine, r.type)) {
-        bmd[r.machine][dk].failSMU += r.smu;
-        bmd[r.machine][dk].failEvents += 1;
-      }
-    });
-
     const rangeDays = allDaysInRange(from, to);
-
-    /* Step 2: สร้างแถวรายวันต่อเครื่อง (เติมวันที่ไม่มี failure ด้วยค่า default) */
     const daily = {};
-    MACHINES.forEach(m => {
-      const dataRows = Object.entries(bmd[m]).map(([dk, v]) => {
-        const dt = Math.min(v.failSMU, HRS), up = Math.max(HRS - dt, 0);
-        const mttr = v.failEvents > 0 ? dt / v.failEvents : 0;
-        const mtbf = v.failEvents > 0 ? up / v.failEvents : HRS;
-        const ma = mttr + mtbf > 0 ? (mtbf / (mtbf + mttr)) * 100 : 100;
-        return { dk, date: v.date, allSMU: v.allSMU, failSMU: dt, events: v.failEvents, uptime: up, mttr, mtbf, ma, hasData: true };
-      });
-      const dataMap = {}; dataRows.forEach(r => dataMap[r.dk] = r);
-
-      if (rangeDays.length > 0) {
-        daily[m] = rangeDays.map(dk => dataMap[dk] || {
-          dk, date: parseDateKey(dk), allSMU: 0, failSMU: 0, events: 0,
-          uptime: HRS, mttr: 0, mtbf: HRS, ma: 100, hasData: false,
-        });
-      } else {
-        daily[m] = dataRows.sort((a, b) => a.dk.localeCompare(b.dk));
-      }
-    });
-
-    /* Step 3: สรุปรวมต่อเครื่อง — Uptime อิงวันทั้งหมดในช่วง × 24 ชม.
-       (สอดคล้องกับ calcGroupMA เพื่อให้ MA% รายเครื่องเทียบกับ MA% รวมกลุ่มได้) */
     const summary = {};
-    const totalRangeDays = rangeDays.length;
+
     MACHINES.forEach(m => {
-      const failRows = daily[m].filter(r => r.events > 0);
-      if (!failRows.length) {
-        summary[m] = { totalFailDT: 0, totalUptime: 0, totalEvents: 0, totalDays: 0, mttr: 0, mtbf: HRS, ma: 100 };
-        return;
-      }
-      const daysAll = totalRangeDays > 0 ? totalRangeDays : daily[m].length;
-      const tDT = failRows.reduce((s, r) => s + r.failSMU, 0);  /* failSMU ถูก cap ที่ 24 แล้ว */
-      const tEv = failRows.reduce((s, r) => s + r.events, 0);
+      const mRecs = data.filter(r => r.machine === m);
+      const failRecs = mRecs.filter(r => isFailure(r.machine, r.type));
+      const perDayAll = distributeAll(mRecs);
+      const agg = aggregateFailures(failRecs, rangeDays);
+
+      const buildRow = (dk) => {
+        const failSMU = Math.min(agg.perDayFail[dk] || 0, HRS);
+        const events = agg.perDayEvents[dk] || 0;
+        const uptime = Math.max(HRS - failSMU, 0);
+        let mttr, mtbf;
+        if (events > 0) {          /* วันที่มี incident เริ่มใหม่ */
+          mttr = failSMU / events;
+          mtbf = uptime / events;
+        } else if (failSMU > 0) {  /* วันกลาง breakdown ที่ลากต่อมา (ไม่มีครั้งใหม่) */
+          mttr = 0; mtbf = 0;
+        } else {                   /* วันปกติ ไม่มี failure */
+          mttr = 0; mtbf = HRS;
+        }
+        const ma = (uptime / HRS) * 100;
+        return { dk, date: parseDateKey(dk), allSMU: perDayAll[dk] || 0, failSMU, events, uptime, mttr, mtbf, ma, hasData: (perDayAll[dk] || 0) > 0 };
+      };
+
+      const dks = rangeDays.length > 0 ? rangeDays : Object.keys(perDayAll).sort();
+      daily[m] = dks.map(buildRow);
+
+      const daysAll = rangeDays.length > 0 ? rangeDays.length : dks.length;
+      const tDT = agg.totalFailDT;
+      const tEv = agg.totalEvents;
       const tUp = Math.max(daysAll * HRS - tDT, 0);
-      const mttr = tEv > 0 ? tDT / tEv : 0;
-      const mtbf = tEv > 0 ? tUp / tEv : HRS;
-      const ma = mttr + mtbf > 0 ? (mtbf / (mtbf + mttr)) * 100 : 100;
-      summary[m] = { totalFailDT: tDT, totalUptime: tUp, totalEvents: tEv, totalDays: failRows.length, mttr, mtbf, ma };
+      summary[m] = {
+        totalFailDT: tDT,
+        totalUptime: tUp,
+        totalEvents: tEv,
+        totalDays: daily[m].filter(r => r.failSMU > 0).length,
+        mttr: tEv > 0 ? tDT / tEv : 0,
+        mtbf: tEv > 0 ? tUp / tEv : HRS,
+        ma: daysAll > 0 ? (tUp / (daysAll * HRS)) * 100 : 100,
+      };
     });
 
     return { daily, summary };
@@ -128,28 +234,23 @@
 
   /* ── MA% รวมของกลุ่มเครื่องจักร ─────────────────────────────────────────── */
   function calcGroupMA(data, machines, failTypes, from, to) {
-    const byDay = {};
-    data.filter(r => machines.includes(r.machine)).forEach(r => {
-      const dk = dateKey(r.date);
-      if (!byDay[dk]) byDay[dk] = { failSMU: 0, failEvents: 0 };
-      if (failTypes.includes(r.type)) { byDay[dk].failSMU += r.smu; byDay[dk].failEvents += 1; }
-    });
-
     const rangeDays = allDaysInRange(from, to);
-    const tAllDays = rangeDays.length > 0 ? rangeDays.length : Object.keys(byDay).length;
+    const failRecs = data.filter(r => machines.includes(r.machine) && failTypes.includes(r.type));
+    const agg = aggregateFailures(failRecs, rangeDays);
 
-    const failRows = Object.values(byDay).filter(v => v.failEvents > 0);
-    if (!failRows.length) {
-      const tUp = tAllDays * HRS;
-      return { mttr: 0, mtbf: tAllDays > 0 ? tUp : HRS, ma: 100, totalDays: tAllDays, totalEvents: 0, totalFailDT: 0, totalUptime: tUp };
-    }
-    const tDT = failRows.reduce((s, r) => s + Math.min(r.failSMU, HRS), 0);
-    const tEv = failRows.reduce((s, r) => s + r.failEvents, 0);
+    const tAllDays = rangeDays.length > 0 ? rangeDays.length : Object.keys(agg.perDayFail).length;
+    const tDT = agg.totalFailDT;
+    const tEv = agg.totalEvents;
     const tUp = Math.max(tAllDays * HRS - tDT, 0);
-    const mttr = tEv > 0 ? tDT / tEv : 0;
-    const mtbf = tEv > 0 ? tUp / tEv : HRS;
-    const ma = mttr + mtbf > 0 ? (mtbf / (mtbf + mttr)) * 100 : 100;
-    return { mttr, mtbf, ma, totalDays: tAllDays, totalEvents: tEv, totalFailDT: tDT, totalUptime: tUp };
+    return {
+      mttr: tEv > 0 ? tDT / tEv : 0,
+      mtbf: tEv > 0 ? tUp / tEv : HRS,
+      ma: tAllDays > 0 ? (tUp / (tAllDays * HRS)) * 100 : 100,
+      totalDays: tAllDays,
+      totalEvents: tEv,
+      totalFailDT: tDT,
+      totalUptime: tUp,
+    };
   }
 
   global.Metrics = {
