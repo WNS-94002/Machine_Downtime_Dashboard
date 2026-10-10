@@ -200,3 +200,7 @@ tr:hover td { background:var(--bg-secondary); }
 
 /* default: hide print report on screen */
 #print-report { display:none; }
+
+.dt-search { width:100%; max-width:380px; margin-top:8px; padding:7px 10px; font-size:12px; font-family:inherit; color:var(--text-primary); background:transparent; border:1px solid var(--border, rgba(128,128,128,.35)); border-radius:8px; outline:none; }
+.dt-search:focus { border-color:#185fa5; }
+@media print { .dt-search { display:none; } }

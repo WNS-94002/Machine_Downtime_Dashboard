@@ -23,6 +23,7 @@
     dtTypes: new Set(['Plan', 'ME', 'EE', 'OPT', 'Uncontrol']),
     dtSortCol: 'smu',   /* 'smu' | 'date' */
     dtSortDir: 'desc',  /* 'desc' | 'asc' */
+    dtSearch: '',       /* ข้อความค้นหา */
   };
   const DT_TYPES = ['Plan', 'ME', 'EE', 'OPT', 'Uncontrol'];
 
@@ -39,6 +40,8 @@
     const { MACHINES, MSHORT, MC, TC } = cfg;
 
     let rows = fd.filter(r => (state.dtMachine === 'all' || r.machine === state.dtMachine) && state.dtTypes.has(r.type));
+    const q = state.dtSearch.trim().toLowerCase();
+    if (q) rows = rows.filter(r => `${r.detail || ''} ${r.machine} ${r.type} ${M.fmtDate(r.date)}`.toLowerCase().includes(q));
     rows = rows.slice().sort((a, b) => {
       const diff = state.dtSortCol === 'smu'
         ? b.smu - a.smu
@@ -104,6 +107,7 @@
       <div class="dt-controls">
         <div class="dt-machine-btns">${machBtns}</div>
         <div class="dt-type-btns">${typeBtns}</div>
+        <input type="search" id="dt-search" class="dt-search" placeholder="พิมพ์เพื่อค้นหา รายละเอียด / เครื่อง / ประเภท / วันที่" value="${esc(state.dtSearch)}" oninput="dtSetSearch(this.value)" aria-label="ค้นหา Downtime">
       </div>
       <div class="tbl-wrap">
         <table>
@@ -121,6 +125,12 @@
 
   function refreshDetailTable() { renderDetailTable(filtered(getMo(), getTy())); }
 
+  function dtSetSearch(v) {
+    state.dtSearch = v;
+    refreshDetailTable();
+    const el = document.getElementById('dt-search');   /* panel ถูก re-render → คืน focus + caret */
+    if (el) { el.focus(); el.setSelectionRange(v.length, v.length); }
+  }
   function dtSetMachine(m) { state.dtMachine = m; refreshDetailTable(); }
   function dtToggleType(t) {
     if (state.dtTypes.has(t)) { if (state.dtTypes.size > 1) state.dtTypes.delete(t); }
@@ -455,6 +465,7 @@
   global.printReport = printReport;
   global.refreshData = refreshData;
   global.dtSetMachine = dtSetMachine;
+  global.dtSetSearch = dtSetSearch;
   global.dtToggleType = dtToggleType;
   global.dtToggleSort = dtToggleSort;
 
