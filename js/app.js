@@ -228,7 +228,7 @@
   ════════════════════════════════════════════════════════════════════════ */
   function renderMTTR(selMachine) {
     const { MACHINES, MSHORT, MC, FAILURE_TYPES } = cfg;
-    const rd = rangeData();
+    const rd = M.filterByOverlap(state.allMerged, state.dateFrom, state.dateTo);
     const { daily, summary } = M.calcMTTRMTBF(rd, state.dateFrom, state.dateTo);
     const dm = daily[selMachine] || [];
     const mColor = MC[MACHINES.indexOf(selMachine)] || '#185fa5';
@@ -345,7 +345,7 @@
   /* ── Print trigger (inline onclick) ─────────────────────────────────────── */
   function printReport(groupKey) {
     const el = document.getElementById('print-report');
-    el.innerHTML = RP.buildReport(rangeData(), groupKey, state.dateFrom, state.dateTo);
+    el.innerHTML = RP.buildReport(M.filterByOverlap(state.allMerged, state.dateFrom, state.dateTo), groupKey, state.dateFrom, state.dateTo);
     setTimeout(() => window.print(), 200);
   }
 

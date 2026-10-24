@@ -23,6 +23,10 @@
      คนละเหตุการณ์), ค่าน้อย = แยกละเอียดขึ้น */
   const BREAKDOWN_GAP_HRS = 24;
 
+  /* Downtime ที่ต่อกันพอดี (ช่องว่างไม่เกินค่านี้ นาที) ถือเป็น breakdown เดียวกัน
+     แม้ detail ต่างกัน (เช่น เปลี่ยนอาการ/ชิ้นส่วนระหว่างซ่อม) */
+  const CONTIGUOUS_GAP_MIN = 30;
+
   /* ── เครื่องจักร ─────────────────────────────────────────────────────────── */
   const MACHINES = ['System', 'Spreader', 'Crusher #1', 'Crusher #2', 'Crusher #3', 'Bucket Wheel #1', 'Bucket Wheel #2'];
   const MSHORT   = ['Sys', 'SPD', 'CR1', 'CR2', 'CR3', 'BW1', 'BW2'];
@@ -66,7 +70,7 @@
     SHEET_ID, GID_2026, GID_2025,
     CSV_2026: csv(GID_2026),
     CSV_2025: csv(GID_2025),
-    HRS, CACHE_TTL_MS, BREAKDOWN_GAP_HRS,
+    HRS, CACHE_TTL_MS, BREAKDOWN_GAP_HRS, CONTIGUOUS_GAP_MIN,
     MACHINES, MSHORT, MALIAS,
     FAILURE_TYPES, PRINT_GROUPS,
     TYPE_ORDER, TC, MC, DP, TH_M,

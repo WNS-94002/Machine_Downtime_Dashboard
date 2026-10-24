@@ -22,6 +22,8 @@
   const DAY_MS = 86400000;  /* 1 วัน (ms) */
   /* ช่องว่างสูงสุด (นาที) ที่ยังถือว่า Downtime ต่อเนื่องเป็น breakdown เดียวกัน */
   const GAP_MIN = (cfg.BREAKDOWN_GAP_HRS != null ? cfg.BREAKDOWN_GAP_HRS : 24) * 60;
+  /* ช่องว่างสูงสุด (นาที) ที่ถือว่า "ติดกัน" แม้ detail ต่างกัน */
+  const CONTIG_MIN = cfg.CONTIGUOUS_GAP_MIN != null ? cfg.CONTIGUOUS_GAP_MIN : 30;
 
   /* ── escape ข้อความก่อน inject ลง innerHTML (กัน markup เพี้ยน/XSS) ──────── */
   function esc(value) {
@@ -49,6 +51,18 @@
     return true;
   }
   function filterByRange(data, from, to) { return data.filter(r => inRange(r, from, to)); }
+  /* กรองตาม "ช่วงเวลาที่คาบเกี่ยว" แทนวันที่เริ่ม — breakdown ที่เริ่มก่อนช่วงแต่ลากเข้ามา
+     (mergeConsec รวมเป็นแถวเดียวที่ date = วันเริ่ม) ต้องไม่หลุดจากการคำนวณ */
+  function filterByOverlap(data, from, to) {
+    const lo = from ? new Date(from).setHours(0, 0, 0, 0) / MIN : null;
+    const hi = to ? new Date(to).setHours(23, 59, 59, 999) / MIN : null;
+    return data.filter(r => {
+      if (!r.date) return false;
+      if (r.absStart == null) return inRange(r, from, to);
+      const end = r.absStart + r.smu * 60;
+      return (hi == null || r.absStart <= hi) && (lo == null || end > lo);
+    });
+  }
   function filterD(data, from, to, mo, ty) {
     return data.filter(r => inRange(r, from, to)
       && (mo === 'all' || monthKey(r.date) === mo)
@@ -142,11 +156,25 @@
         }
       }
     }
+    /* รอบ 2: Downtime ที่ "ติดกันพอดี" (หยุดต่อเนื่อง ไม่มีเครื่องเดินคั่น) แม้ detail ต่างกัน
+       → breakdown เดียวกัน (เช่น Wheel Boom → Hopper Car → Housing Gear ต่อกันโดยไม่มีช่องว่าง) */
+    incidents.sort((a, b) => a.absStart - b.absStart);
+    const merged = [];
+    for (const inc of incidents) {
+      const last = merged[merged.length - 1];
+      if (last && inc.absStart <= last.end + CONTIG_MIN) {
+        last.end = Math.max(last.end, inc.end);
+        last.hours += inc.hours;
+      } else {
+        merged.push(inc);
+      }
+    }
+
     /* แถวที่ไม่มีเวลาเริ่ม → นับเป็น incident ละ 1 (อิงวันที่) */
-    for (const r of noTime) incidents.push({ absStart: null, end: null, hours: r.smu, date: r.date, detail: normDetail(r.detail) });
+    for (const r of noTime) merged.push({ absStart: null, end: null, hours: r.smu, date: r.date, detail: normDetail(r.detail) });
 
     /* เรียงตามเวลาเริ่มเพื่อความเป็นระเบียบของผลลัพธ์ */
-    return incidents.sort((a, b) => (a.absStart || 0) - (b.absStart || 0));
+    return merged.sort((a, b) => (a.absStart || 0) - (b.absStart || 0));
   }
 
   /* สรุปสถิติ failure ของชุด record เทียบช่วงวัน
@@ -165,16 +193,24 @@
 
     const incidents = detectIncidents(failRecs);
     const perDayEvents = {};
+    const firstDk = rangeDays[0], lastDk = rangeDays[rangeDays.length - 1];
+    const counted = [];
     incidents.forEach(inc => {
-      const dk = inc.absStart != null ? dateKey(new Date(inc.absStart * MIN)) : dateKey(inc.date);
+      let dk = inc.absStart != null ? dateKey(new Date(inc.absStart * MIN)) : dateKey(inc.date);
+      if (firstDk) {
+        /* incident ที่เริ่มก่อนช่วงแต่ยังลากเข้ามา → นับเป็น 1 ครั้งในวันแรกของช่วง */
+        if (dk < firstDk && inc.end != null && inc.end > parseDateKey(firstDk).getTime() / MIN) dk = firstDk;
+        if (dk < firstDk || dk > lastDk) return;
+      }
       perDayEvents[dk] = (perDayEvents[dk] || 0) + 1;
+      counted.push(inc);
     });
 
     /* รวม Downtime: cap ที่ 24 ชม./วัน (วันที่ดับเต็มวัน = 24 พอดี) */
     const days = rangeDays.length > 0 ? rangeDays : Object.keys(perDayFail);
     const totalFailDT = days.reduce((s, dk) => s + Math.min(perDayFail[dk] || 0, HRS), 0);
 
-    return { perDayFail, perDayEvents, incidents, totalFailDT, totalEvents: incidents.length };
+    return { perDayFail, perDayEvents, incidents: counted, totalFailDT, totalEvents: counted.length };
   }
 
   /* กระจาย Downtime ทุกประเภท (ไม่เฉพาะ failure) → ชั่วโมงต่อวัน */
@@ -284,7 +320,7 @@
   global.Metrics = {
     esc,
     dateKey, monthKey, monthLabel, fmtDate, shortDate, toISO, parseDateKey,
-    inRange, filterByRange, filterD, sumS, isFailure,
+    inRange, filterByRange, filterByOverlap, filterD, sumS, isFailure,
     avC, mttrC, mtbfC, allDaysInRange,
     calcMTTRMTBF, calcGroupMA,
   };
